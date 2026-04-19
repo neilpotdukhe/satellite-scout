@@ -84,14 +84,33 @@
     });
   });
 
-  // Load recent queries
+  // Load recent queries — try local API first, fall back to GitHub raw
+  const GITHUB_DATA = 'https://raw.githubusercontent.com/neilpotdukhe/satellite-scout/main/api/data';
+  const QUERY_IDS = ['32a57c724db6', '5e9fb082e2a8', '7db00582db8b', 'd92542d1992b', 'ff49366238aa'];
+
   (async () => {
     try {
+      // Try local API first
+      let queries = [];
       const r = await fetch('/api/queries');
       const data = await r.json();
-      if (!data.queries || data.queries.length === 0) return;
+      if (data.queries && data.queries.length > 0) {
+        queries = data.queries;
+      } else {
+        // Fallback: load summaries from GitHub raw
+        const loads = QUERY_IDS.map(async id => {
+          try {
+            const resp = await fetch(`${GITHUB_DATA}/${id}.json`);
+            if (!resp.ok) return null;
+            const d = await resp.json();
+            return { query_id: id, query: d.query||'', target_feature: d.target_feature||'', total: d.total||0, stats: d.stats||{} };
+          } catch { return null; }
+        });
+        queries = (await Promise.all(loads)).filter(Boolean);
+      }
+      if (!queries.length) return;
       const list = document.getElementById('recentList');
-      list.innerHTML = data.queries.map(q => `
+      list.innerHTML = queries.map(q => `
         <a href="/results/${q.query_id}" class="recent-card">
           <div class="recent-query">${q.query}</div>
           <div class="recent-stats">

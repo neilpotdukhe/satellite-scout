@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block title %}Results — Satellite Scout{% endblock %}
+
+{% block body %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+<div class="results" id="resultsApp">
+  <header class="results-header">
+    <a href="/" class="back-link">← New query</a>
+    <h1 id="queryTitle">Loading...</h1>
+    <div class="meta" id="queryMeta"></div>
+  </header>
+
+  <div class="stat-cards" id="statCards"></div>
+
+  <div id="mapContainer" class="map-container hidden"></div>
+
+  <div class="view-toggle">
+    <button class="view-btn active" data-view="grid" id="gridBtn">Grid</button>
+    <button class="view-btn" data-view="map" id="mapBtn">Map</button>
+  </div>
+
+  <div class="courts-grid" id="courtsGrid">
+    <div style="text-align:center; padding:40px; color:#888;">Loading results from GitHub...</div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal" class="modal hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <button class="modal-close" id="modalClose">×</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+const GITHUB_DATA = 'https://raw.githubusercontent.com/neilpotdukhe/satellite-scout/main/api/data';
+const queryId = {{ query_id|tojson if query_id is defined else 'null' }} || window.location.pathname.split('/').pop();
+
+let resultsData = [];
+let targetFeature = '';
+let featureIsType = false;
+let singleClass = false;
+
+const COLORS = { yes: '#4ade80', no: '#f87171', unclear: '#fbbf24' };
+
+function sourceLabel(url) {
+  if (!url) return 'View source';
+  try { return `View source (${new URL(url).hostname.replace(/^www\./, '')})`; } catch { return 'View source'; }
+}
+
+function showCourtModal(court) {
+  const body = document.getElementById('modalBody');
+  const status = court.classification || 'unclear';
+  const cls = (status === 'yes' || status === 'no') ? status : 'unclear';
+  const badgeHtml = singleClass ? '' :
+    `<span class="badge ${cls}">${cls === 'yes' ? 'HAS ' + targetFeature.toUpperCase() : cls === 'no' ? 'NO ' + targetFeature.toUpperCase() : 'UNCLEAR'}</span>`;
+  const imgHtml = court.image ? `<img class="modal-img" src="${court.image}" alt="${court.name}">` : '';
+  const quoteHtml = court.backboard_quote
+    ? `<div class="source-block quote"><div class="source-label">📖 Authoritative quote</div><blockquote>"${court.backboard_quote}"</blockquote></div>`
+    : '';
+  const featuresHtml = court.features_quote
+    ? `<div class="source-block features"><div class="source-label">📋 Details</div><pre>${court.features_quote}</pre></div>`
+    : '';
+  const summaryHtml = court.summary
+    ? `<div class="source-block summary"><div class="source-label">📝 Summary</div><p>${court.summary}</p></div>`
+    : '';
+  const mapsUrl = court.lat ? `https://www.google.com/maps/@${court.lat},${court.lng},20z/data=!3m1!1e3` : null;
+
+  body.innerHTML = `
+    <div class="modal-header"><h2>${court.name} ${badgeHtml}</h2><div class="modal-addr">${court.address || ''}</div></div>
+    ${imgHtml}
+    <div class="modal-body-content">
+      ${quoteHtml}${featuresHtml}${summaryHtml}
+      <div class="source-block links"><div class="source-label">🔗 Links</div>
+        ${court.source_url ? `<a href="${court.source_url}" target="_blank">${sourceLabel(court.source_url)}</a>` : ''}
+        ${mapsUrl ? `<a href="${mapsUrl}" target="_blank">Open in Google Maps (satellite)</a>` : ''}
+      </div>
+    </div>`;
+  document.getElementById('modal').classList.remove('hidden');
+}
+
+document.getElementById('modalClose').addEventListener('click', () => document.getElementById('modal').classList.add('hidden'));
+document.querySelector('.modal-backdrop').addEventListener('click', () => document.getElementById('modal').classList.add('hidden'));
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.getElementById('modal').classList.add('hidden'); });
+
+async function loadResults() {
+  // Try local API first, fallback to GitHub
+  let data;
+  try {
+    const r = await fetch(`/api/query/${queryId}`);
+    if (r.ok) { data = await r.json(); }
+  } catch {}
+  if (!data) {
+    try {
+      const r = await fetch(`${GITHUB_DATA}/${queryId}.json`);
+      if (r.ok) { data = await r.json(); }
+    } catch {}
+  }
+  if (!data) {
+    document.getElementById('queryTitle').textContent = 'Query not found';
+    document.getElementById('courtsGrid').innerHTML = '<div style="text-align:center;padding:40px;color:#888;">Could not load results.</div>';
+    return;
+  }
+
+  // Populate header
+  targetFeature = data.target_feature || '';
+  const locationType = data.location_type || '';
+  featureIsType = targetFeature.toLowerCase() === locationType.toLowerCase();
+  const stats = data.stats || {};
+  const total = data.total || 0;
+  resultsData = data.results || [];
+
+  const classesPresent = [stats.yes && 'yes', stats.no && 'no', stats.unclear && 'unclear'].filter(Boolean);
+  singleClass = classesPresent.length <= 1;
+
+  document.getElementById('queryTitle').textContent = data.query || 'Results';
+  document.getElementById('queryMeta').innerHTML =
+    `Found <strong>${total}</strong> ${locationType}${total !== 1 ? 's' : ''} in ${data.area || ''}` +
+    (!featureIsType && targetFeature ? ` • Looking for: <strong>${targetFeature}</strong>` : '');
+
+  // Stat cards
+  if (!singleClass) {
+    const sc = document.getElementById('statCards');
+    let html = '';
+    if (stats.yes) html += `<button class="stat-card yes" data-filter="yes"><div class="stat-n">${stats.yes}</div><div class="stat-l">${featureIsType ? 'Confirmed' : 'Has ' + targetFeature}</div></button>`;
+    if (stats.no) html += `<button class="stat-card no" data-filter="no"><div class="stat-n">${stats.no}</div><div class="stat-l">No ${targetFeature}</div></button>`;
+    if (stats.unclear) html += `<button class="stat-card unclear" data-filter="unclear"><div class="stat-n">${stats.unclear}</div><div class="stat-l">Unclear</div></button>`;
+    html += `<button class="stat-card all active" data-filter="all"><div class="stat-n">${total}</div><div class="stat-l">All</div></button>`;
+    sc.innerHTML = html;
+    sc.querySelectorAll('.stat-card').forEach(card => {
+      card.addEventListener('click', () => {
+        sc.querySelectorAll('.stat-card').forEach(c => c.classList.remove('active'));
+        card.classList.add('active');
+        const f = card.dataset.filter;
+        document.querySelectorAll('.court-card').forEach(cc => {
+          cc.classList.toggle('hidden', f !== 'all' && cc.dataset.classification !== f);
+        });
+      });
+    });
+  }
+
+  // Grid
+  const grid = document.getElementById('courtsGrid');
+  grid.innerHTML = resultsData.map((c, i) => `
+    <button class="court-card ${c.classification || 'unclear'}" data-idx="${i}" data-classification="${c.classification || 'unclear'}">
+      ${c.image ? `<img src="${c.image}" alt="${c.name}" loading="lazy">` : '<div class="no-image">no image</div>'}
+      <div class="court-info">
+        <div class="court-name">${c.name || 'Unknown'}
+          ${!singleClass ? `<span class="badge ${c.classification || 'unclear'}">${c.classification === 'yes' ? '✓' : c.classification === 'no' ? '✗' : '?'}</span>` : ''}
+        </div>
+        <div class="court-addr">${c.address || ''}</div>
+        <div class="court-meta"><span class="click-hint">click for details →</span></div>
+      </div>
+    </button>
+  `).join('');
+
+  grid.querySelectorAll('.court-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const idx = parseInt(card.dataset.idx);
+      showCourtModal(resultsData[idx]);
+    });
+  });
+
+  // Map
+  let mapInstance = null;
+  document.getElementById('mapBtn').addEventListener('click', () => {
+    document.getElementById('mapContainer').classList.remove('hidden');
+    document.getElementById('courtsGrid').classList.add('hidden');
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('mapBtn').classList.add('active');
+    if (!mapInstance) {
+      mapInstance = L.map('mapContainer');
+      L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Imagery © Esri', maxZoom: 19
+      }).addTo(mapInstance);
+      const bounds = [];
+      resultsData.forEach(r => {
+        if (!r.lat || !r.lng) return;
+        const cls = r.classification || 'unclear';
+        L.circleMarker([r.lat, r.lng], { radius: 8, fillColor: COLORS[cls] || COLORS.unclear, color: '#000', weight: 1.5, fillOpacity: 0.9 })
+          .bindPopup(`<b>${r.name}</b><br>${r.address || ''}`)
+          .on('click', () => showCourtModal(r))
+          .addTo(mapInstance);
+        bounds.push([r.lat, r.lng]);
+      });
+      if (bounds.length) mapInstance.fitBounds(bounds, { padding: [40, 40] });
+      else mapInstance.setView([47.6, -122.3], 12);
+    }
+    setTimeout(() => mapInstance && mapInstance.invalidateSize(), 50);
+  });
+  document.getElementById('gridBtn').addEventListener('click', () => {
+    document.getElementById('mapContainer').classList.add('hidden');
+    document.getElementById('courtsGrid').classList.remove('hidden');
+    document.querySelectorAll('.view-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('gridBtn').classList.add('active');
+  });
+}
+
+loadResults();
+</script>
+{% endblock %}
