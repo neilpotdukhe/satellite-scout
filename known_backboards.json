@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Amy Yee Tennis Center",
+    "lat": 47.5849223,
+    "lng": -122.2972754,
+    "display": "Amy Yee Tennis Center, Mount Baker, Seattle, King County, Washington, United States"
+  },
+  {
+    "name": "David Rodgers Park",
+    "lat": 47.6440676,
+    "lng": -122.3595287,
+    "display": "David Rodgers Park, 2800, Queen Anne, Seattle, King County, Washington, 98119, United States"
+  },
+  {
+    "name": "Solstice Park",
+    "lat": 47.5365366,
+    "lng": -122.390402,
+    "display": "Solstice Park, Solstice P-Patch, Seattle, King County, Washington, 98136, United States"
+  },
+  {
+    "name": "Wallingford Playfield",
+    "lat": 47.6586026,
+    "lng": -122.3374175,
+    "display": "Wallingford Playfield, 4219, Wallingford, Seattle, King County, Washington, 98103, United States"
+  }
+]

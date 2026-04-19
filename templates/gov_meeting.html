@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}Meeting — Seattle Gov Intelligence{% endblock %}
+
+{% block body %}
+<div class="gov-meeting-shell">
+  <aside class="gov-sidebar">
+    <a href="/gov" class="back-link">← All meetings</a>
+    <div class="gov-meeting-meta" id="meta">
+      <div class="loading">Loading…</div>
+    </div>
+    <div class="gov-toc" id="toc"></div>
+  </aside>
+
+  <main class="gov-main">
+    <section class="gov-section" id="summarySection">
+      <div class="loading">Loading meeting…</div>
+    </section>
+    <section class="gov-section" id="topicsSection"></section>
+    <section class="gov-section" id="quotesSection"></section>
+    <section class="gov-section" id="transcriptSection"></section>
+  </main>
+</div>
+
+<script>
+const meetingId = {{ meeting_id|tojson }};
+
+async function load() {
+  try {
+    const r = await fetch(`/api/gov/meeting/${meetingId}`);
+    const data = await r.json();
+    if (data.error) {
+      document.getElementById('summarySection').innerHTML = `<div class="error">${data.error}</div>`;
+      return;
+    }
+    renderMeeting(data);
+  } catch (e) {
+    document.getElementById('summarySection').innerHTML = `<div class="error">${e.message}</div>`;
+  }
+}
+
+function formatTimestamp(sec) {
+  const s = Math.floor(sec % 60);
+  const m = Math.floor((sec / 60) % 60);
+  const h = Math.floor(sec / 3600);
+  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function importanceBadge(i) {
+  const cls = i === 'high' ? 'high' : i === 'medium' ? 'medium' : 'low';
+  return `<span class="importance-badge ${cls}">${i}</span>`;
+}
+
+function renderMeeting(data) {
+  const md = data.metadata;
+  const ex = data.extracted;
+
+  // Sidebar meta
+  document.getElementById('meta').innerHTML = `
+    <div class="meeting-committee-big">${md.committee}</div>
+    <div class="meeting-title-big">${md.title}</div>
+    <div class="meta-row"><span>Date</span><span>${md.date}</span></div>
+    <div class="meta-row"><span>Duration</span><span>${md.duration}</span></div>
+    <div class="meta-row"><span>Source</span><a href="https://www.seattlechannel.org/mayor-and-council/city-council/city-council-all-videos-index/?videoid=${md.video_id}" target="_blank">Seattle Channel ↗</a></div>
+    <div class="meta-row"><span>Video</span><a href="${md.mp4_url}" target="_blank">MP4 ↗</a></div>
+    <div class="meta-row"><span>Transcript</span><a href="${md.srt_url}" target="_blank">SRT ↗</a></div>
+  `;
+
+  // Table of contents
+  if (ex && ex.topics) {
+    document.getElementById('toc').innerHTML = `
+      <div class="toc-label">Topics</div>
+      <ol class="toc-list">
+        ${ex.topics.map((t, i) => `
+          <li><a href="#topic-${i}">${importanceBadge(t.importance)} ${t.title}</a></li>
+        `).join('')}
+      </ol>
+    `;
+  }
+
+  // Summary section
+  if (ex) {
+    document.getElementById('summarySection').innerHTML = `
+      <div class="section-label">Digest</div>
+      <h1 class="digest-headline">${ex.headline}</h1>
+      <p class="digest-summary">${ex.summary}</p>
+      <div class="tag-row">
+        ${(ex.tags || []).map(t => `<span class="tag">${t}</span>`).join('')}
+      </div>
+      ${ex.attendance ? `
+        <div class="attendance">
+          <strong>Present:</strong> ${(ex.attendance.present || []).join(', ') || '—'}
+          ${(ex.attendance.excused || []).length ? ` · <strong>Excused:</strong> ${ex.attendance.excused.join(', ')}` : ''}
+        </div>
+      ` : ''}
+      ${ex.bills_mentioned && ex.bills_mentioned.length ? `
+        <div class="bills">
+          <strong>Bills mentioned:</strong>
+          ${ex.bills_mentioned.map(b => `<code>${b}</code>`).join(', ')}
+        </div>
+      ` : ''}
+    `;
+  } else {
+    document.getElementById('summarySection').innerHTML = `
+      <div class="pending-box">
+        <div>Extraction not yet complete. Run <code>/gov extract ${meetingId}</code> in Claude Code, or click fetch on the home page.</div>
+      </div>
+    `;
+  }
+
+  // Topics section
+  if (ex && ex.topics) {
+    document.getElementById('topicsSection').innerHTML = `
+      <div class="section-label">Topics</div>
+      ${ex.topics.map((t, i) => `
+        <div class="topic-card ${t.importance}" id="topic-${i}">
+          <div class="topic-head">
+            <div class="topic-title">${t.title}</div>
+            ${importanceBadge(t.importance)}
+          </div>
+          <div class="topic-summary">${t.summary}</div>
+          ${t.sponsor ? `<div class="topic-meta"><strong>Sponsor:</strong> ${t.sponsor}</div>` : ''}
+          ${t.speakers && t.speakers.length ? `<div class="topic-meta"><strong>Speakers:</strong> ${t.speakers.join(', ')}</div>` : ''}
+          ${t.decisions && t.decisions.length ? `
+            <div class="decisions">
+              ${t.decisions.map(d => `
+                <div class="decision">
+                  <span class="decision-action">${d.action}</span>
+                  <span class="decision-desc">${d.description}</span>
+                  ${d.vote ? `<span class="decision-vote">${d.vote}</span>` : ''}
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${t.bills_mentioned && t.bills_mentioned.length ? `
+            <div class="topic-meta"><strong>Bills:</strong> ${t.bills_mentioned.map(b => `<code>${b}</code>`).join(', ')}</div>
+          ` : ''}
+          <div class="topic-jump">
+            <a class="jump-link" href="#ts-${t.start_sec}">📍 Jump to ${formatTimestamp(t.start_sec)}</a>
+          </div>
+        </div>
+      `).join('')}
+    `;
+  }
+
+  // Quotes section
+  if (ex && ex.key_quotes && ex.key_quotes.length) {
+    document.getElementById('quotesSection').innerHTML = `
+      <div class="section-label">Key quotes</div>
+      ${ex.key_quotes.map(q => `
+        <div class="quote-card">
+          <blockquote>"${q.quote}"</blockquote>
+          <div class="quote-attribution">
+            <strong>— ${q.speaker}</strong>
+            <span class="quote-ts">${formatTimestamp(q.start_sec)}</span>
+            ${q.context ? `<span class="quote-context">${q.context}</span>` : ''}
+          </div>
+        </div>
+      `).join('')}
+    `;
+  }
+
+  // Transcript section (collapsed, jump-targets match topic timestamps)
+  if (data.transcript && data.transcript.paragraphs) {
+    document.getElementById('transcriptSection').innerHTML = `
+      <div class="section-label">Full transcript</div>
+      <details class="transcript-details">
+        <summary>Expand ${data.transcript.total_paragraphs} paragraphs · ${formatTimestamp(data.transcript.duration_sec)}</summary>
+        <div class="transcript-body">
+          ${data.transcript.paragraphs.map(p => `
+            <div class="paragraph" id="ts-${Math.floor(p.start_sec)}">
+              <span class="paragraph-ts">${formatTimestamp(p.start_sec)}</span>
+              <span class="paragraph-text">${p.text}</span>
+            </div>
+          `).join('')}
+        </div>
+      </details>
+    `;
+  }
+}
+
+load();
+</script>
+{% endblock %}

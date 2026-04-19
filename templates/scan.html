@@ -1,0 +1,439 @@
+{% extends "base.html" %}
+{% block title %}Scan area — Satellite Scout{% endblock %}
+
+{% block body %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+
+<div class="scan-shell">
+  <aside class="scan-sidebar">
+    <a href="/" class="back-link">← Home</a>
+    <h1 class="scan-title">Scan area</h1>
+    <p class="scan-sub">Draw a rectangle on the map. Type what to find. Claude Code visually scans every tile.</p>
+
+    <div class="scan-form">
+      <label class="scan-label">What to find</label>
+      <input id="queryInput" type="text" placeholder="tennis courts" value="tennis courts" autocomplete="off">
+
+      <label class="scan-label">Zoom level</label>
+      <select id="zoomInput">
+        <option value="18">18 — wide (blocks)</option>
+        <option value="19" selected>19 — ~0.2 m/px (courts / pools)</option>
+        <option value="20">20 — ~0.1 m/px (cars / small features)</option>
+      </select>
+
+      <button id="drawBtn" class="btn btn-primary">Draw a rectangle</button>
+      <button id="scanBtn" class="btn btn-primary" disabled>Scan this area</button>
+
+      <div id="sizePreview" class="scan-size-preview hidden"></div>
+    </div>
+
+    <div id="scanStatus" class="scan-status hidden">
+      <div class="scan-status-title" id="scanStatusTitle">Preparing scan…</div>
+      <div class="scan-progress">
+        <div class="scan-progress-bar" id="scanProgressBar"></div>
+      </div>
+      <div class="scan-status-meta" id="scanStatusMeta"></div>
+      <div class="scan-command-box hidden" id="scanCommandBox">
+        <div class="scan-command-label">Run in Claude Code:</div>
+        <div class="scan-command">
+          <code id="scanCommand"></code>
+          <button id="copyCmdBtn">Copy</button>
+        </div>
+        <div class="scan-hint">Claude Code will visually analyze each tile and write detections back. This page auto-refreshes as results arrive.</div>
+      </div>
+    </div>
+
+    <div id="scanResultsPanel" class="scan-results-panel hidden">
+      <div class="scan-results-header">
+        <span class="scan-results-count" id="scanResultsCount">0</span> detections
+      </div>
+      <div id="scanResultsList" class="scan-results-list"></div>
+    </div>
+
+    <div id="pastScansPanel" class="past-scans-panel hidden">
+      <div class="past-scans-header">Past scans</div>
+      <div id="pastScansList" class="past-scans-list"></div>
+    </div>
+  </aside>
+
+  <main id="mapMain" class="scan-map"></main>
+</div>
+
+<!-- Detection modal -->
+<div id="detModal" class="modal hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal-content">
+    <button class="modal-close" id="detModalClose">×</button>
+    <div id="detModalBody"></div>
+  </div>
+</div>
+
+<script>
+const preloadedScanId = {{ scan_id|tojson if scan_id is defined else 'null' }};
+
+// ----- Map init -----
+const map = L.map('mapMain').setView([47.6156, -122.3195], 15);  // Cal Anderson default
+L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  attribution: 'Imagery © Esri', maxZoom: 19,
+}).addTo(map);
+
+const drawnItems = new L.FeatureGroup().addTo(map);
+let currentRectangle = null;
+let currentPolygon = null;
+const drawer = new L.Draw.Rectangle(map, { shapeOptions: { color: '#60a5fa', weight: 2, fillOpacity: 0.1 } });
+
+document.getElementById('drawBtn').addEventListener('click', () => {
+  drawnItems.clearLayers();
+  currentRectangle = null;
+  currentPolygon = null;
+  drawer.enable();
+  document.getElementById('scanBtn').disabled = true;
+  document.getElementById('sizePreview').classList.add('hidden');
+});
+
+const HARD_LIMIT = 500;
+const WARN_LIMIT = 150;
+
+function compositeCountAt(bounds, zoom) {
+  const latMid = (bounds.getNorth() + bounds.getSouth()) / 2;
+  const metersPerPx = 156543.03392 * Math.cos(latMid * Math.PI / 180) / Math.pow(2, zoom);
+  const compositeM = metersPerPx * 768;  // 3 tiles * 256 px
+  const areaM = haversineArea(bounds);
+  return { count: Math.max(1, Math.ceil(areaM / (compositeM * compositeM))), areaM };
+}
+
+function updatePreview() {
+  if (!currentRectangle) return;
+  const b = currentRectangle.getBounds();
+  const zoom = parseInt(document.getElementById('zoomInput').value, 10);
+  const { count, areaM } = compositeCountAt(b, zoom);
+  const preview = document.getElementById('sizePreview');
+  preview.classList.remove('hidden');
+
+  let statusHtml;
+  if (count > HARD_LIMIT) {
+    const fallbackZoom = Math.max(zoom - 1, 16);
+    const fallback = compositeCountAt(b, fallbackZoom);
+    statusHtml = `<div class="error">
+      ⚠️ Too large: ${count} tiles exceeds hard limit of ${HARD_LIMIT}.<br>
+      <button id="autoZoomBtn" class="inline-btn">Switch to zoom ${fallbackZoom} (${fallback.count} tiles)</button>
+      or draw a smaller area.
+    </div>`;
+    document.getElementById('scanBtn').disabled = true;
+  } else if (count > WARN_LIMIT) {
+    statusHtml = `<div class="warning">
+      ⚠️ Large scan: ${count} tiles. Will take a while for Claude Code to process.
+      ${zoom > 17 ? `Consider <button id="autoZoomBtn" class="inline-btn">zoom ${zoom - 1} (${compositeCountAt(b, zoom - 1).count} tiles)</button>.` : ''}
+    </div>`;
+    document.getElementById('scanBtn').disabled = false;
+  } else {
+    statusHtml = `<div class="ready">✓ Ready to scan.</div>`;
+    document.getElementById('scanBtn').disabled = false;
+  }
+
+  preview.innerHTML = `
+    <div><strong>Area:</strong> ${(areaM / 1e6).toFixed(2)} km²</div>
+    <div><strong>Est. scan tiles:</strong> ${count}</div>
+    ${statusHtml}
+  `;
+
+  // Wire up auto-zoom button if present
+  const autoBtn = document.getElementById('autoZoomBtn');
+  if (autoBtn) {
+    autoBtn.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const newZoom = parseInt(autoBtn.textContent.match(/zoom (\d+)/)[1], 10);
+      document.getElementById('zoomInput').value = newZoom;
+      updatePreview();
+    });
+  }
+}
+
+map.on(L.Draw.Event.CREATED, (e) => {
+  currentRectangle = e.layer;
+  drawnItems.addLayer(currentRectangle);
+  const b = currentRectangle.getBounds();
+  currentPolygon = [
+    [b.getNorth(), b.getWest()],
+    [b.getNorth(), b.getEast()],
+    [b.getSouth(), b.getEast()],
+    [b.getSouth(), b.getWest()],
+  ];
+  updatePreview();
+});
+
+// Recompute preview when zoom level changes
+document.getElementById('zoomInput').addEventListener('change', updatePreview);
+
+function haversineArea(bounds) {
+  // Rough rectangular area in m²
+  const R = 6371000;
+  const lat1 = bounds.getSouth() * Math.PI / 180;
+  const lat2 = bounds.getNorth() * Math.PI / 180;
+  const dLat = lat2 - lat1;
+  const dLng = (bounds.getEast() - bounds.getWest()) * Math.PI / 180;
+  const height = R * dLat;
+  const width = R * dLng * Math.cos((lat1 + lat2) / 2);
+  return Math.abs(height * width);
+}
+
+// ----- Scan submit -----
+document.getElementById('scanBtn').addEventListener('click', async () => {
+  if (!currentPolygon) return;
+  const query = document.getElementById('queryInput').value.trim();
+  if (!query) return;
+  const zoom = parseInt(document.getElementById('zoomInput').value, 10);
+
+  document.getElementById('scanStatus').classList.remove('hidden');
+  document.getElementById('scanStatusTitle').textContent = 'Fetching satellite tiles…';
+  document.getElementById('scanBtn').disabled = true;
+
+  try {
+    const r = await fetch('/api/scan/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, polygon: currentPolygon, zoom }),
+    });
+    const data = await r.json();
+    if (data.error) {
+      document.getElementById('scanStatusTitle').textContent = 'Error: ' + data.error;
+      document.getElementById('scanBtn').disabled = false;
+      return;
+    }
+
+    // Update URL without reload
+    history.replaceState(null, '', `/scan/${data.scan_id}`);
+
+    if (data.auto_run) {
+      // Flask auto-spawned a Claude Code child process — no user action needed
+      document.getElementById('scanStatusTitle').textContent =
+        `Fetched ${data.tile_count} tiles. Claude Code is analyzing them now…`;
+      document.getElementById('scanCommandBox').classList.add('hidden');
+    } else {
+      // Fallback: user needs to manually run the command
+      document.getElementById('scanStatusTitle').textContent =
+        `Fetched ${data.tile_count} tiles. Waiting for Claude Code to analyze.`;
+      document.getElementById('scanCommand').textContent = data.command;
+      document.getElementById('scanCommandBox').classList.remove('hidden');
+    }
+
+    pollScan(data.scan_id);
+  } catch (e) {
+    document.getElementById('scanStatusTitle').textContent = 'Error: ' + e.message;
+    document.getElementById('scanBtn').disabled = false;
+  }
+});
+
+document.getElementById('copyCmdBtn').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('scanCommand').textContent);
+  document.getElementById('copyCmdBtn').textContent = 'Copied!';
+  setTimeout(() => document.getElementById('copyCmdBtn').textContent = 'Copy', 1500);
+});
+
+// ----- Polling + rendering -----
+let scanResultsLayer = null;
+let scanTileLayer = null;
+let currentScanId = null;
+
+async function pollScan(scanId) {
+  currentScanId = scanId;
+  const poll = async () => {
+    try {
+      const [statusR, scanR] = await Promise.all([
+        fetch(`/api/scan/${scanId}/status`).then(r => r.json()),
+        fetch(`/api/scan/${scanId}`).then(r => r.json()),
+      ]);
+
+      const total = statusR.total_tiles;
+      const done = statusR.tiles_done;
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      document.getElementById('scanProgressBar').style.width = `${pct}%`;
+      document.getElementById('scanStatusMeta').textContent =
+        `${done}/${total} tiles analyzed • ${statusR.raw_detections} raw detections`;
+
+      renderScanResults(scanR);
+
+      if (statusR.status === 'complete' && done === total) {
+        document.getElementById('scanStatusTitle').textContent = '✓ Scan complete';
+        document.getElementById('scanCommandBox').classList.add('hidden');
+        clearInterval(pollInterval);
+      }
+    } catch (e) { console.error(e); }
+  };
+  const pollInterval = setInterval(poll, 2500);
+  poll();
+}
+
+let firstRender = true;
+function renderScanResults(manifest) {
+  if (scanResultsLayer) { map.removeLayer(scanResultsLayer); scanResultsLayer = null; }
+  if (scanTileLayer) { map.removeLayer(scanTileLayer); scanTileLayer = null; }
+
+  // Fit map to the polygon bbox on first render
+  if (firstRender && manifest.bbox) {
+    const [w, s, e, n] = manifest.bbox;
+    map.fitBounds([[s, w], [n, e]], { padding: [40, 40] });
+    firstRender = false;
+  }
+
+  // Draw scanned tile outlines (translucent)
+  scanTileLayer = L.layerGroup().addTo(map);
+  for (const tile of manifest.tiles) {
+    const [w, s, e, n] = tile.bbox;
+    const color = tile.status === 'done' ? '#4ade80' : (tile.status === 'pending' ? '#6b7280' : '#f87171');
+    L.rectangle([[s, w], [n, e]], {
+      color: color, weight: 1, fillOpacity: 0.05, dashArray: tile.status === 'pending' ? '4 4' : null,
+    }).addTo(scanTileLayer);
+  }
+
+  // Draw detections as circle markers
+  scanResultsLayer = L.layerGroup().addTo(map);
+  const agg = manifest.aggregated || { detections: [] };
+  const count = agg.detections.length;
+  document.getElementById('scanResultsCount').textContent = count;
+  if (count > 0) {
+    document.getElementById('scanResultsPanel').classList.remove('hidden');
+  }
+
+  const list = document.getElementById('scanResultsList');
+  list.innerHTML = '';
+
+  agg.detections.forEach((det, idx) => {
+    const color = det.confidence === 'high' ? '#4ade80' : det.confidence === 'medium' ? '#fbbf24' : '#f87171';
+    const marker = L.circleMarker([det.lat, det.lng], {
+      radius: 8, fillColor: color, color: '#000', weight: 1.5, fillOpacity: 0.9,
+    }).addTo(scanResultsLayer);
+    marker.bindTooltip(`#${idx + 1} · ${det.confidence}`);
+    marker.on('click', () => showDetectionModal(det, idx + 1, manifest.query));
+
+    // Add to sidebar list
+    const item = document.createElement('div');
+    item.className = `scan-result-item ${det.confidence}`;
+    item.innerHTML = `
+      <div class="scan-result-num">#${idx + 1}</div>
+      <div class="scan-result-body">
+        <div class="scan-result-desc">${det.description || manifest.query}</div>
+        <div class="scan-result-meta">${det.confidence} · ${det.lat.toFixed(5)}, ${det.lng.toFixed(5)}</div>
+      </div>
+    `;
+    item.addEventListener('click', () => {
+      map.setView([det.lat, det.lng], 19);
+      showDetectionModal(det, idx + 1, manifest.query);
+    });
+    list.appendChild(item);
+  });
+}
+
+function showDetectionModal(det, idx, query) {
+  const body = document.getElementById('detModalBody');
+  const [x, y, w, h] = det.pixel_bbox;
+  const gmaps = `https://www.google.com/maps/@${det.lat},${det.lng},20z/data=!3m1!1e3`;
+  body.innerHTML = `
+    <div class="modal-header">
+      <h2>Detection #${idx}
+        <span class="badge ${det.confidence === 'high' ? 'yes' : det.confidence === 'low' ? 'no' : 'unclear'}">${det.confidence.toUpperCase()}</span>
+      </h2>
+      <div class="modal-addr">${det.lat.toFixed(6)}, ${det.lng.toFixed(6)}</div>
+    </div>
+    <div class="modal-body-content">
+      <div class="source-block">
+        <div class="source-label">📐 Bounding box</div>
+        <pre>pixel_bbox: [${x}, ${y}, ${w}, ${h}]</pre>
+      </div>
+      <div class="source-block">
+        <div class="source-label">🔍 What Claude Code saw</div>
+        <p>${det.description || `(matched "${query}")`}</p>
+      </div>
+      ${det.tile_image ? `
+      <div class="source-block">
+        <div class="source-label">🛰️ Source tile</div>
+        <img src="${det.tile_image}" style="width:100%;border-radius:6px;">
+      </div>` : ''}
+      <div class="source-block links">
+        <div class="source-label">🔗 Links</div>
+        <a href="${gmaps}" target="_blank">Open in Google Maps (satellite)</a>
+      </div>
+    </div>
+  `;
+  document.getElementById('detModal').classList.remove('hidden');
+}
+
+document.getElementById('detModalClose').addEventListener('click', () =>
+  document.getElementById('detModal').classList.add('hidden'));
+document.querySelector('#detModal .modal-backdrop').addEventListener('click', () =>
+  document.getElementById('detModal').classList.add('hidden'));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('detModal').classList.add('hidden');
+});
+
+// Auto-load preloaded scan
+if (preloadedScanId) {
+  document.getElementById('scanStatus').classList.remove('hidden');
+  document.getElementById('scanStatusTitle').textContent = 'Loading scan…';
+  pollScan(preloadedScanId);
+}
+
+// ----- Past scans list -----
+async function loadPastScans() {
+  try {
+    const r = await fetch('/api/scans');
+    const data = await r.json();
+    const list = document.getElementById('pastScansList');
+    const panel = document.getElementById('pastScansPanel');
+
+    if (!data.scans || data.scans.length === 0) {
+      panel.classList.add('hidden');
+      return;
+    }
+
+    // Filter out the current scan if any
+    const scans = data.scans.filter(s => s.scan_id !== preloadedScanId);
+    if (scans.length === 0) {
+      panel.classList.add('hidden');
+      return;
+    }
+
+    list.innerHTML = scans.map(s => {
+      const ago = timeAgo(s.created_at);
+      const statusClass = s.status === 'complete' ? 'complete' :
+                          s.tiles_done > 0 ? 'running' : 'pending';
+      const statusLabel = s.status === 'complete' ? '✓ complete' :
+                          s.tiles_done > 0 ? `⏳ ${s.tiles_done}/${s.tile_count}` : 'pending';
+      return `
+        <a href="/scan/${s.scan_id}" class="past-scan-card">
+          ${s.preview_image ? `<img src="${s.preview_image}" class="past-scan-thumb">` : '<div class="past-scan-thumb placeholder"></div>'}
+          <div class="past-scan-body">
+            <div class="past-scan-query">${s.query}</div>
+            <div class="past-scan-meta">
+              <span class="past-scan-count">${s.unique_detections ?? 0}</span> detections ·
+              ${s.tile_count} tiles ·
+              ${ago}
+            </div>
+            <div class="past-scan-status ${statusClass}">${statusLabel}</div>
+          </div>
+        </a>
+      `;
+    }).join('');
+    panel.classList.remove('hidden');
+  } catch (e) { console.error(e); }
+}
+
+function timeAgo(timestamp) {
+  if (!timestamp) return 'unknown';
+  const sec = Math.floor((Date.now() / 1000) - timestamp);
+  if (sec < 60) return `${sec}s ago`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h ago`;
+  return `${Math.floor(sec / 86400)}d ago`;
+}
+
+loadPastScans();
+// Reload past scans when a new scan is submitted
+document.getElementById('scanBtn').addEventListener('click', () => setTimeout(loadPastScans, 500));
+</script>
+{% endblock %}

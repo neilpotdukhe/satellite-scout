@@ -1,0 +1,30 @@
+# Cache (satellite tiles, scan results, web cache)
+cache/
+__pycache__/
+*.pyc
+
+# Data files (generated per-user)
+data/
+
+# Static cached images served by Flask
+static/cache-images/
+
+# Development images (not needed for app)
+images/
+accurate_backboards.json
+NOTES.md
+
+# Test screenshots (CI artifacts, not source)
+test-screenshots/
+
+# Static court images (demo data, regenerate with pipeline)
+static/images/courts/
+
+# Environment
+.env
+.venv/
+venv/
+
+# OS
+.DS_Store
+report.html

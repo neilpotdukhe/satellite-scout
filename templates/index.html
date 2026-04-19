@@ -1,0 +1,188 @@
+{% extends "base.html" %}
+{% block title %}Satellite Scout — Spatial Queries with AI Vision{% endblock %}
+
+{% block body %}
+<div class="home">
+  <div class="hero">
+    <h1>Satellite Scout</h1>
+    <p class="tagline">Ask questions about places on Earth. Get answers with satellite imagery + web sources.</p>
+  </div>
+
+  <form id="queryForm" class="query-form">
+    <input
+      type="text"
+      id="queryInput"
+      name="query"
+      placeholder="tennis courts in Seattle with hitting walls"
+      value="tennis courts in Seattle with hitting walls"
+      autocomplete="off"
+    >
+    <button type="submit" id="submitBtn">Scout</button>
+  </form>
+
+  <div class="examples">
+    <div class="examples-label">Try:</div>
+    <button class="example-chip" data-query="tennis courts in Seattle with hitting walls">
+      tennis courts in Seattle with hitting walls
+    </button>
+    <button class="example-chip" data-query="parking lots in Portland with EV chargers">
+      parking lots in Portland with EV chargers
+    </button>
+    <button class="example-chip" data-query="parks in San Francisco with basketball courts">
+      parks in San Francisco with basketball courts
+    </button>
+  </div>
+
+  <div id="loader" class="loader hidden">
+    <div class="spinner"></div>
+    <div id="loaderText">Finding locations…</div>
+  </div>
+
+  <div id="pendingCard" class="pending-card hidden">
+    <div class="pending-title">🛰️  Query needs research</div>
+    <div class="pending-body">
+      Satellite Scout hasn't cached this query yet. Ask Claude Code to research it:
+    </div>
+    <div class="command-box">
+      <code id="commandText">/scout tennis courts in Seattle with hitting walls</code>
+      <button class="copy-btn" id="copyBtn">Copy</button>
+    </div>
+    <div class="pending-foot">
+      Paste the command into Claude Code. This page will auto-refresh when results are ready.
+      <span id="pollStatus" class="poll-status">Waiting for results…</span>
+    </div>
+  </div>
+
+  <div id="recentSection" class="recent hidden">
+    <h3>Recent queries</h3>
+    <div id="recentList" class="recent-list"></div>
+  </div>
+
+  <div class="how">
+    <h3>How it works</h3>
+    <ol>
+      <li><strong>Parse</strong> the query into type, area, target feature</li>
+      <li><strong>Find</strong> all matching locations via OpenStreetMap</li>
+      <li><strong>Fetch</strong> satellite imagery (Google Maps tiles, free)</li>
+      <li><strong>Gather</strong> authoritative sources from the web</li>
+      <li><strong>Classify</strong> each location and link back to exact sources</li>
+    </ol>
+  </div>
+</div>
+
+<script>
+  const form = document.getElementById('queryForm');
+  const input = document.getElementById('queryInput');
+  const loader = document.getElementById('loader');
+  const loaderText = document.getElementById('loaderText');
+  const submitBtn = document.getElementById('submitBtn');
+
+  document.querySelectorAll('.example-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      input.value = chip.dataset.query;
+      form.requestSubmit();
+    });
+  });
+
+  // Load recent queries
+  (async () => {
+    try {
+      const r = await fetch('/api/queries');
+      const data = await r.json();
+      if (!data.queries || data.queries.length === 0) return;
+      const list = document.getElementById('recentList');
+      list.innerHTML = data.queries.map(q => `
+        <a href="/results/${q.query_id}" class="recent-card">
+          <div class="recent-query">${q.query}</div>
+          <div class="recent-stats">
+            <span class="recent-stat yes">${q.stats.yes || 0} ✓</span>
+            <span class="recent-stat no">${q.stats.no || 0} ✗</span>
+            <span class="recent-stat unclear">${q.stats.unclear || 0} ?</span>
+            <span class="recent-total">${q.total} total</span>
+          </div>
+        </a>
+      `).join('');
+      document.getElementById('recentSection').classList.remove('hidden');
+    } catch (e) { console.error(e); }
+  })();
+
+  const pendingCard = document.getElementById('pendingCard');
+  const commandText = document.getElementById('commandText');
+  const pollStatus = document.getElementById('pollStatus');
+  const copyBtn = document.getElementById('copyBtn');
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(commandText.textContent);
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+  });
+
+  let pollHandle = null;
+
+  function startPolling(queryId) {
+    let dotCount = 0;
+    const poll = async () => {
+      dotCount = (dotCount + 1) % 4;
+      pollStatus.textContent = 'Waiting for results' + '.'.repeat(dotCount);
+      try {
+        const r = await fetch(`/api/status/${queryId}`);
+        const s = await r.json();
+        if (s.ready) {
+          pollStatus.textContent = 'Ready! Redirecting…';
+          clearInterval(pollHandle);
+          window.location.href = `/results/${queryId}`;
+        }
+      } catch (e) {}
+    };
+    pollHandle = setInterval(poll, 2000);
+    poll();
+  }
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const query = input.value.trim();
+    if (!query) return;
+
+    loader.classList.remove('hidden');
+    pendingCard.classList.add('hidden');
+    if (pollHandle) { clearInterval(pollHandle); pollHandle = null; }
+    submitBtn.disabled = true;
+    loaderText.textContent = 'Checking cache…';
+
+    try {
+      const resp = await fetch('/api/query', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({query})
+      });
+      const data = await resp.json();
+
+      if (data.error) {
+        loader.classList.add('hidden');
+        loaderText.textContent = 'Error: ' + data.error;
+        submitBtn.disabled = false;
+        return;
+      }
+
+      if (data.cached) {
+        // Direct redirect to results
+        window.location.href = `/results/${data.query_id}`;
+        return;
+      }
+
+      if (data.pending) {
+        // Show the "run in Claude Code" affordance
+        loader.classList.add('hidden');
+        pendingCard.classList.remove('hidden');
+        commandText.textContent = data.command;
+        submitBtn.disabled = false;
+        startPolling(data.query_id);
+      }
+    } catch (err) {
+      loader.classList.add('hidden');
+      loaderText.textContent = 'Error: ' + err.message;
+      submitBtn.disabled = false;
+    }
+  });
+</script>
+{% endblock %}

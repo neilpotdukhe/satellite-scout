@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}Seattle Gov Intelligence — Satellite Scout{% endblock %}
+
+{% block body %}
+<div class="gov-shell">
+  <header class="gov-header">
+    <a href="/" class="back-link">← Home</a>
+    <h1>Seattle City Council</h1>
+    <p class="sub">
+      Every council meeting, transcribed and digested by Claude Code. Click any meeting to see decisions, bills, votes, and key quotes.
+    </p>
+  </header>
+
+  <div class="gov-toolbar">
+    <button id="refreshBtn" class="btn btn-primary">↻ Refresh from Seattle Channel</button>
+    <span id="gov-status" class="gov-status"></span>
+  </div>
+
+  <div class="gov-meetings" id="meetingsList">
+    <div class="loading">Loading meetings…</div>
+  </div>
+</div>
+
+<script>
+async function loadMeetings(refresh = false) {
+  const list = document.getElementById('meetingsList');
+  list.innerHTML = '<div class="loading">Loading meetings…</div>';
+  try {
+    const r = await fetch('/api/gov/meetings' + (refresh ? '?refresh=1' : ''));
+    const data = await r.json();
+    if (data.error) {
+      list.innerHTML = `<div class="error">${data.error}</div>`;
+      return;
+    }
+    if (!data.meetings || data.meetings.length === 0) {
+      list.innerHTML = '<div class="loading">No meetings found.</div>';
+      return;
+    }
+    list.innerHTML = data.meetings.map(renderMeetingCard).join('');
+    document.getElementById('gov-status').textContent = `${data.meetings.length} meetings`;
+    // Wire up buttons
+    document.querySelectorAll('.meeting-fetch-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const mid = btn.dataset.meetingId;
+        btn.textContent = 'Fetching transcript…';
+        btn.disabled = true;
+        try {
+          const r = await fetch(`/api/gov/meeting/${mid}/fetch`, {method: 'POST'});
+          const d = await r.json();
+          if (d.error) throw new Error(d.error);
+          btn.textContent = '✓ Fetched. Extracting…';
+          // Auto-kick-off extraction
+          const r2 = await fetch(`/api/gov/meeting/${mid}/extract`, {method: 'POST'});
+          const d2 = await r2.json();
+          if (d2.error) throw new Error(d2.error);
+          btn.textContent = `Claude Code PID ${d2.child_pid}`;
+          setTimeout(() => loadMeetings(), 2000);
+        } catch (err) {
+          btn.textContent = 'Error: ' + err.message;
+        }
+      });
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="error">${e.message}</div>`;
+  }
+}
+
+function renderMeetingCard(m) {
+  // Build status badges for the header row
+  let badges = '';
+  if (m.has_extraction) {
+    badges += `<span class="meeting-badge done">✓ Analyzed</span>`;
+    if (m.validation_passed === true) {
+      badges += `<span class="meeting-badge validated">✓ Verified</span>`;
+    } else if (m.validation_passed === false) {
+      badges += `<span class="meeting-badge failed">⚠ ${m.validation_error_count || 0} issues</span>`;
+    }
+  } else if (m.has_transcript) {
+    badges = `<span class="meeting-badge pending">⏳ Analyzing</span>`;
+  }
+
+  // Content varies based on analysis state
+  let body;
+  if (m.has_extraction) {
+    const statsLine = [];
+    if (m.topic_count) statsLine.push(`${m.topic_count} topics`);
+    if (m.high_importance_count) statsLine.push(`<span class="stat-high">${m.high_importance_count} high</span>`);
+    if (m.bills_count) statsLine.push(`${m.bills_count} bills`);
+    body = `
+      <h2 class="meeting-headline">${m.headline || m.title}</h2>
+      <p class="meeting-preview">${m.summary_preview || ''}</p>
+      <div class="meeting-stats">${statsLine.join(' · ')}</div>
+    `;
+  } else {
+    body = `
+      <h2 class="meeting-headline unanalyzed">${m.title}</h2>
+      <p class="meeting-preview unanalyzed">${(m.description || '').substring(0, 180)}${m.description && m.description.length > 180 ? '…' : ''}</p>
+      <button class="btn-inline meeting-fetch-btn" data-meeting-id="${m.video_id}">Fetch + analyze →</button>
+    `;
+  }
+
+  const cardWrap = m.has_extraction
+    ? `<a href="/gov/meetings/${m.video_id}" class="meeting-card analyzed">`
+    : `<div class="meeting-card unanalyzed-card">`;
+  const cardClose = m.has_extraction ? `</a>` : `</div>`;
+
+  return `
+    ${cardWrap}
+      <div class="meeting-head">
+        <div class="meeting-meta">
+          <span class="meeting-committee">${m.committee}</span>
+          <span class="meeting-sep">·</span>
+          <span class="meeting-date">${m.date}</span>
+          <span class="meeting-sep">·</span>
+          <span class="meeting-duration">${m.duration}</span>
+        </div>
+        <div class="meeting-badges">${badges}</div>
+      </div>
+      ${body}
+    ${cardClose}
+  `;
+}
+
+document.getElementById('refreshBtn').addEventListener('click', () => loadMeetings(true));
+loadMeetings();
+</script>
+{% endblock %}
