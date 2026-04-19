@@ -1,4 +1,6 @@
 {
+  "framework": null,
+  "installCommand": "pip install flask requests",
   "rewrites": [
     { "source": "/(.*)", "destination": "/api/index" }
   ]
