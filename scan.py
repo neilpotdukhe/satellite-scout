@@ -23,7 +23,10 @@ from pathlib import Path
 from typing import Optional, Any
 
 import requests
-from PIL import Image
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 from io import BytesIO
 
 
