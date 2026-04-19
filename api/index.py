@@ -4,10 +4,23 @@ import os, sys, json
 from pathlib import Path
 
 ROOT = str(Path(__file__).resolve().parent.parent)
+API_DIR = str(Path(__file__).resolve().parent)
 sys.path.insert(0, ROOT)
+sys.path.insert(0, API_DIR)
 
-# Import embedded query data (no filesystem dependency)
-from cached_data import QUERIES
+# Import embedded query data — try multiple paths
+QUERIES = {}
+try:
+    from cached_data import QUERIES
+except ImportError:
+    # Fallback: try loading from api/data/ directory
+    _data_dir = Path(__file__).resolve().parent / "data"
+    if _data_dir.exists():
+        for _f in _data_dir.glob("*.json"):
+            try:
+                QUERIES[_f.stem] = json.loads(_f.read_text())
+            except Exception:
+                pass
 
 app = Flask(__name__,
             template_folder=os.path.join(ROOT, "templates"),
