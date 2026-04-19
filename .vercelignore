@@ -7,3 +7,18 @@ report.html
 __pycache__/
 .git/
 .vercel/
+
+# Root Python files — local-only, not needed for Vercel serverless
+app.py
+cache.py
+parser.py
+pipeline.py
+pipeline_generic.py
+satellite_scout.py
+scan.py
+known_courts.json
+known_backboards.json
+scripts/
+gov/
+Procfile
+render.yaml
