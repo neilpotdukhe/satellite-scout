@@ -1,0 +1,57 @@
+{
+  "query": "show me 7 11's in south lake union seattle",
+  "target_feature": "is a 7-Eleven inside South Lake Union",
+  "location_type": "7-Eleven convenience store",
+  "area": "South Lake Union, Seattle",
+  "stats": {
+    "yes": 1,
+    "no": 1,
+    "unclear": 1
+  },
+  "total": 3,
+  "results": [
+    {
+      "id": "denny_way_362",
+      "name": "7-Eleven \u2014 362 Denny Way",
+      "address": "362 Denny Way, Seattle, WA 98109",
+      "lat": 47.61876,
+      "lng": -122.34939,
+      "courts": 1,
+      "image": "/static/cache-images/47.618760_-122.349390_z20_s800.jpg",
+      "classification": "yes",
+      "summary": "The only 7-Eleven inside the strict South Lake Union boundary, sitting at the SW corner of Denny Way and Aurora Ave N. Open 24/7, store #23109. Foursquare and Yelp both file this location under the 'South Lake Union' neighborhood. Standard convenience-store footprint with a small white box building and an adjacent surface parking lot, visible from satellite.",
+      "backboard_quote": "7-Eleven - South Lake Union - 362 Denny Way",
+      "features_quote": "Address: 362 Denny Way, Seattle, WA 98109-4912 | Store #: 23109 | Hours: Open 24/7 | Phone: (206) 443-0711 | Services: ATM, Beer, Wine, Hot Foods, Lottery, Propane, Redbox, Amazon Locker, Key Cafe, EBT Accepted, Mobile Checkout, 7-Eleven Wallet",
+      "source_url": "https://www.7-eleven.com/locations/wa/seattle/362-denny-way-23109",
+      "observation": "Satellite shows a small white single-story storefront with a surface parking lot behind it, fronting Denny Way at the Aurora intersection \u2014 matches a typical 7-Eleven footprint."
+    },
+    {
+      "id": "minor_ave_1830",
+      "name": "7-Eleven \u2014 1830 Minor Ave",
+      "address": "1830 Minor Ave, Seattle, WA 98101",
+      "lat": 47.61761,
+      "lng": -122.33162,
+      "courts": 1,
+      "image": "/static/cache-images/47.617610_-122.331620_z20_s800.jpg",
+      "classification": "unclear",
+      "summary": "Sits one block south of Denny Way at Minor Ave & Howell. Officially zoned 98101 (downtown) and labeled 'Denny Triangle' rather than SLU by most sources, but it is the closest 7-Eleven to the southern edge of SLU and a common walking-distance stop for SLU workers. Open 24/7, store #41883. Includes validated parking.",
+      "backboard_quote": "The 7-Eleven at 1830 Minor Ave is located in Seattle, WA 98101 in the Denny Triangle neighborhood",
+      "features_quote": "Address: 1830 Minor Ave, Seattle, WA 98101 | Store #: 41883 | Hours: Open 24/7 | Phone: (206) 724-6138 | Services: ATM, Beer, Wine, Mobile Checkout, 7-Eleven Wallet, Validated Parking",
+      "source_url": "https://www.7-eleven.com/locations/wa/seattle/1830-minor-ave-41883"
+    },
+    {
+      "id": "virginia_st_819",
+      "name": "7-Eleven \u2014 819 Virginia St",
+      "address": "819 Virginia St, Seattle, WA 98101",
+      "lat": 47.61605,
+      "lng": -122.33589,
+      "courts": 1,
+      "image": "/static/cache-images/47.616050_-122.335890_z20_s800.jpg",
+      "classification": "no",
+      "summary": "Located at 819 Virginia St in the Belltown neighborhood, several blocks south of Denny Way and well outside South Lake Union. Included here only as the next-nearest store south of SLU for context. Store #35532.",
+      "backboard_quote": "The 7-Eleven is located at 819 Virginia St, Seattle, WA 98101-4421 in the Belltown neighborhood",
+      "features_quote": "Address: 819 Virginia St, Seattle, WA 98101 | Store #: 35532 | Phone: (206) 623-0413 | Services: ATM, Beer, Wine, Hot Foods, Lottery, Propane, EBT Accepted, Mobile Checkout, 7NOW Delivery, Money Orders",
+      "source_url": "https://www.7-eleven.com/locations/wa/seattle/819-virginia-st-35532"
+    }
+  ]
+}

@@ -8,19 +8,35 @@ API_DIR = str(Path(__file__).resolve().parent)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, API_DIR)
 
-# Import embedded query data — try multiple paths
-QUERIES = {}
-try:
-    from cached_data import QUERIES
-except ImportError:
-    # Fallback: try loading from api/data/ directory
+# Load query data — try local files first, then fetch from GitHub
+import requests as _req
+
+_GITHUB_RAW = "https://raw.githubusercontent.com/neilpotdukhe/satellite-scout/main/api/data"
+_QUERY_IDS = ["32a57c724db6", "5e9fb082e2a8", "7db00582db8b", "d92542d1992b", "ff49366238aa"]
+_queries_cache = {}
+
+def _get_queries():
+    global _queries_cache
+    if _queries_cache:
+        return _queries_cache
+    # Try local files first
     _data_dir = Path(__file__).resolve().parent / "data"
-    if _data_dir.exists():
-        for _f in _data_dir.glob("*.json"):
+    for qid in _QUERY_IDS:
+        local = _data_dir / f"{qid}.json"
+        if local.exists():
             try:
-                QUERIES[_f.stem] = json.loads(_f.read_text())
+                _queries_cache[qid] = json.loads(local.read_text())
+                continue
             except Exception:
                 pass
+        # Fallback: fetch from GitHub
+        try:
+            r = _req.get(f"{_GITHUB_RAW}/{qid}.json", timeout=5)
+            if r.status_code == 200:
+                _queries_cache[qid] = r.json()
+        except Exception:
+            pass
+    return _queries_cache
 
 app = Flask(__name__,
             template_folder=os.path.join(ROOT, "templates"),
@@ -46,7 +62,7 @@ def results_page(query_id):
 @app.route("/api/queries")
 def api_queries():
     queries = []
-    for qid, data in QUERIES.items():
+    for qid, data in _get_queries().items():
         queries.append({
             "query_id": qid,
             "query": data.get("query", ""),
@@ -61,23 +77,23 @@ def api_queries():
 
 @app.route("/api/query/<query_id>")
 def api_query(query_id):
-    if query_id not in QUERIES:
+    if query_id not in _get_queries():
         return jsonify({"error": "not found"}), 404
-    return jsonify(QUERIES[query_id])
+    return jsonify(_get_queries()[query_id])
 
 
 @app.route("/api/status/<query_id>")
 def api_status(query_id):
-    if query_id in QUERIES:
+    if query_id in _get_queries():
         return jsonify({"status": "complete", "query_id": query_id})
     return jsonify({"status": "not_found"}), 404
 
 
 @app.route("/api/court/<query_id>/<court_id>")
 def api_court(query_id, court_id):
-    if query_id not in QUERIES:
+    if query_id not in _get_queries():
         return jsonify({"error": "query not found"}), 404
-    for court in QUERIES[query_id].get("results", []):
+    for court in _get_queries()[query_id].get("results", []):
         if court.get("id") == court_id:
             return jsonify(court)
     return jsonify({"error": "court not found"}), 404
