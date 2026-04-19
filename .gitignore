@@ -29,3 +29,4 @@ venv/
 .DS_Store
 report.html
 .vercel
+api/cached_data.py
