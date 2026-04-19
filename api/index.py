@@ -103,3 +103,14 @@ def gov_home():
 @app.route("/api/gov/meetings")
 def api_gov_meetings():
     return jsonify({"meetings": []})
+
+
+@app.route("/_debug")
+def debug():
+    """Debug route to see what Flask receives."""
+    return jsonify({
+        "path": request.path,
+        "url": request.url,
+        "method": request.method,
+        "headers": dict(request.headers),
+    })
