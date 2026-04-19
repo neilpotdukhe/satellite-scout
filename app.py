@@ -15,6 +15,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
+_is_vercel = os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+_cache_root = Path("/tmp/cache") if _is_vercel else Path("cache")
+
 from pipeline import run_query, get_seattle_tennis_results
 from cache import query_cache, ensure_cache_dirs
 import scan as scan_engine
@@ -140,7 +143,10 @@ def api_court(query_id, court_id):
 def api_queries():
     """List all cached queries with preview stats."""
     queries = []
-    for f in sorted(Path("cache/queries").glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    queries_dir = _cache_root / "queries"
+    if not queries_dir.exists():
+        return jsonify({"queries": []})
+    for f in sorted(queries_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
         try:
             data = json.loads(f.read_text())
             queries.append({
@@ -164,7 +170,7 @@ def serve_court_image(filename):
 
 @app.route("/static/cache-images/<path:filename>")
 def serve_cache_image(filename):
-    return send_from_directory("cache/images", filename)
+    return send_from_directory(str(_cache_root / "images"), filename)
 
 
 # ---------- Scan: polygon visual search ----------
@@ -277,7 +283,7 @@ def scan_result_page(scan_id):
 def api_scans_list():
     """List all past scans with preview metadata."""
     scans = []
-    scans_dir = Path("cache/scans")
+    scans_dir = _cache_root / "scans"
     if scans_dir.exists():
         for d in scans_dir.iterdir():
             if not d.is_dir():
@@ -321,7 +327,7 @@ def api_scans_list():
 
 @app.route("/cache/scans/<path:path>")
 def serve_scan_file(path):
-    return send_from_directory("cache/scans", path)
+    return send_from_directory(str(_cache_root / "scans"), path)
 
 
 # ---------- Gov: Seattle City Council meeting intelligence ----------
@@ -338,7 +344,7 @@ def api_gov_meetings():
     limit = int(request.args.get("limit", 30))
     refresh = request.args.get("refresh") == "1"
 
-    meetings_cache = Path("cache/gov/scraped_meetings.json")
+    meetings_cache = _cache_root / "gov/scraped_meetings.json"
     if refresh or not meetings_cache.exists():
         try:
             meetings = gov_scraper.scrape_meetings(limit=limit)
@@ -383,7 +389,7 @@ def api_gov_meetings():
 def api_gov_fetch(meeting_id):
     """Download the SRT + parse into transcript.json for a meeting."""
     m_dict = None
-    cache_file = Path("cache/gov/scraped_meetings.json")
+    cache_file = _cache_root / "gov/scraped_meetings.json"
     if cache_file.exists():
         for d in json.loads(cache_file.read_text()):
             if d["video_id"] == meeting_id:

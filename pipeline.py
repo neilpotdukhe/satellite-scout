@@ -7,7 +7,14 @@ from parser import parse_query
 
 def get_seattle_tennis_results() -> dict:
     """Return preprocessed Seattle tennis court results (the canonical demo data)."""
-    with open("data/courts.json") as f:
+    data_path = Path("data/courts.json")
+    if not data_path.exists():
+        return _build_result_payload(
+            query="tennis courts in Seattle with hitting walls",
+            courts=[],
+            target_feature="hitting wall",
+        )
+    with open(data_path) as f:
         courts = json.load(f)
     return _build_result_payload(
         query="tennis courts in Seattle with hitting walls",

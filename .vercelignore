@@ -1,0 +1,9 @@
+cache/
+data/
+images/
+test-screenshots/
+report.html
+*.pyc
+__pycache__/
+.git/
+.vercel/

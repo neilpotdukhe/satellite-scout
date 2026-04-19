@@ -27,7 +27,8 @@ from PIL import Image
 from io import BytesIO
 
 
-SCANS_DIR = Path("cache/scans")
+import os as _os
+SCANS_DIR = Path("/tmp/cache/scans") if _os.environ.get("VERCEL") or _os.environ.get("AWS_LAMBDA_FUNCTION_NAME") else Path("cache/scans")
 TILE_SIZE = 256        # Google tile size in pixels
 COMPOSITE_TILES = 3    # 3x3 composite -> 768px composite (we upscale slightly to 800)
 COMPOSITE_PX = 800     # final scan image size

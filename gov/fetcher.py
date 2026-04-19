@@ -14,7 +14,8 @@ import requests
 from gov.scraper import Meeting
 
 
-MEETINGS_DIR = Path("cache/gov/meetings")
+import os as _os
+MEETINGS_DIR = Path("/tmp/cache/gov/meetings") if _os.environ.get("VERCEL") or _os.environ.get("AWS_LAMBDA_FUNCTION_NAME") else Path("cache/gov/meetings")
 
 
 @dataclass

@@ -4,7 +4,9 @@ import json
 import hashlib
 from pathlib import Path
 
-CACHE_DIR = Path("cache")
+import os
+_is_vercel = os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+CACHE_DIR = Path("/tmp/cache") if _is_vercel else Path("cache")
 QUERY_CACHE = CACHE_DIR / "queries"
 WEB_CACHE = CACHE_DIR / "web"
 IMAGE_CACHE = CACHE_DIR / "images"
