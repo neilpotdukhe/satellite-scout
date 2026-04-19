@@ -21,8 +21,9 @@
 
       <label class="scan-label">Zoom level</label>
       <select id="zoomInput">
-        <option value="18">18 — wide (blocks)</option>
-        <option value="19" selected>19 — ~0.2 m/px (courts / pools)</option>
+        <option value="17">17 — ultra-wide (~miles, fast)</option>
+        <option value="18" selected>18 — wide (blocks, recommended)</option>
+        <option value="19">19 — ~0.2 m/px (courts / pools)</option>
         <option value="20">20 — ~0.1 m/px (cars / small features)</option>
       </select>
 
@@ -77,9 +78,9 @@
 const preloadedScanId = {{ scan_id|tojson if scan_id is defined else 'null' }};
 
 // ----- Map init -----
-const map = L.map('mapMain').setView([47.6156, -122.3195], 15);  // Cal Anderson default
+const map = L.map('mapMain').setView([47.6156, -122.3195], 13);  // Seattle metro default, zoomed out
 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  attribution: 'Imagery © Esri', maxZoom: 19,
+  attribution: 'Imagery © Esri', maxZoom: 21,
 }).addTo(map);
 
 const drawnItems = new L.FeatureGroup().addTo(map);

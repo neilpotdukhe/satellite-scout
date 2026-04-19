@@ -33,6 +33,12 @@ COMPOSITE_TILES = 3    # 3x3 composite -> 768px composite (we upscale slightly t
 COMPOSITE_PX = 800     # final scan image size
 DEFAULT_ZOOM = 19      # ~0.2 m/px at Seattle latitude
 
+# Wide-area scan settings (for covering miles)
+WIDE_COMPOSITE_TILES = 5    # 5x5 tiles per composite = 1280px raw
+WIDE_COMPOSITE_PX = 1200    # bigger output for more detail
+WIDE_ZOOM = 18              # ~0.4 m/px — 4x area per tile vs zoom 19
+MAX_WORKERS = 32            # parallel tile fetches (up from 8)
+
 
 # ---- Web Mercator math ----
 
@@ -232,12 +238,16 @@ def fetch_composite(tile_indices: list[tuple[int, int]], zoom: int, out_path: Pa
     min_x = min(t[0] for t in tile_indices)
     min_y = min(t[1] for t in tile_indices)
 
-    for tx, ty in tile_indices:
-        img = _fetch_google_tile(tx, ty, zoom)
-        if img is None:
-            continue
-        imgs[(tx - min_x, ty - min_y)] = img
-        time.sleep(0.02)
+    from concurrent.futures import ThreadPoolExecutor, as_completed as _as_completed
+
+    def _get_tile(txy):
+        tx, ty = txy
+        return (tx - min_x, ty - min_y), _fetch_google_tile(tx, ty, zoom)
+
+    with ThreadPoolExecutor(max_workers=min(n2, 25)) as pool:
+        for (dx, dy), img in pool.map(lambda t: _get_tile(t), tile_indices):
+            if img is not None:
+                imgs[(dx, dy)] = img
 
     if len(imgs) < n2 * 0.8:
         return False
@@ -257,12 +267,40 @@ def fetch_composite(tile_indices: list[tuple[int, int]], zoom: int, out_path: Pa
 
 # ---- Create a new scan ----
 
-def create_scan(query: str, polygon: list[list[float]], zoom: int = DEFAULT_ZOOM) -> dict:
-    """Create a new scan: generate the grid, fetch tiles, save manifest. Returns manifest."""
+def _estimate_area_sq_miles(polygon: list[list[float]]) -> float:
+    """Rough area estimate for the polygon bbox in square miles."""
+    west, south, east, north = polygon_bbox(polygon)
+    lat_mid = (north + south) / 2
+    width_m = abs(east - west) * 111320 * math.cos(math.radians(lat_mid))
+    height_m = abs(north - south) * 111320
+    return (width_m * height_m) / (1609.34 ** 2)
+
+
+def create_scan(query: str, polygon: list[list[float]], zoom: int = None,
+                wide_mode: bool = False) -> dict:
+    """Create a new scan: generate the grid, fetch tiles, save manifest. Returns manifest.
+
+    If wide_mode=True or area > 0.5 sq mi, automatically uses lower zoom + bigger composites
+    for faster coverage of large areas.
+    """
     SCANS_DIR.mkdir(parents=True, exist_ok=True)
     scan_id = hashlib.md5(f"{query}{polygon}{time.time()}".encode()).hexdigest()[:12]
 
-    composites = composite_grid(polygon, zoom=zoom)
+    # Auto-detect wide mode based on polygon area
+    area_sqmi = _estimate_area_sq_miles(polygon)
+    if wide_mode or area_sqmi > 0.5:
+        effective_zoom = zoom or WIDE_ZOOM
+        effective_composite_tiles = WIDE_COMPOSITE_TILES
+        effective_composite_px = WIDE_COMPOSITE_PX
+        workers = MAX_WORKERS
+    else:
+        effective_zoom = zoom or DEFAULT_ZOOM
+        effective_composite_tiles = COMPOSITE_TILES
+        effective_composite_px = COMPOSITE_PX
+        workers = MAX_WORKERS  # always use max workers now
+
+    composites = composite_grid(polygon, zoom=effective_zoom,
+                                composite_tiles=effective_composite_tiles)
 
     scan_dir = _scan_dir(scan_id)
     manifest = {
@@ -270,20 +308,23 @@ def create_scan(query: str, polygon: list[list[float]], zoom: int = DEFAULT_ZOOM
         "query": query,
         "polygon": polygon,
         "bbox": polygon_bbox(polygon),
-        "zoom": zoom,
-        "composite_size": COMPOSITE_PX,
+        "zoom": effective_zoom,
+        "composite_size": effective_composite_px,
+        "composite_tiles": effective_composite_tiles,
+        "area_sq_miles": round(area_sqmi, 2),
         "created_at": time.time(),
         "tiles": [],
         "status": "fetching",
+        "total_composites": len(composites),
     }
     save_manifest(manifest)
 
-    # Fetch composites (parallelizable — for MVP, serial with small concurrency)
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     def _fetch_one(comp):
         img_path = scan_dir / "tiles" / f"{comp['tile_id']}.jpg"
-        ok = fetch_composite(comp["tile_indices"], comp["zoom"], img_path)
+        ok = fetch_composite(comp["tile_indices"], comp["zoom"], img_path,
+                            composite_px=effective_composite_px)
         tile = {
             "tile_id": comp["tile_id"],
             "center_lat": comp["center_lat"],
@@ -298,16 +339,20 @@ def create_scan(query: str, polygon: list[list[float]], zoom: int = DEFAULT_ZOOM
             tile["error"] = "failed to fetch tiles"
         return tile
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [pool.submit(_fetch_one, c) for c in composites]
         for fut in as_completed(futures):
             manifest["tiles"].append(fut.result())
             # Periodic save so the UI can show progress
-            if len(manifest["tiles"]) % 5 == 0:
+            if len(manifest["tiles"]) % 3 == 0:
                 save_manifest(manifest)
 
     manifest["tiles"].sort(key=lambda t: (t["center_lat"], t["center_lng"]))
     manifest["status"] = "ready_for_analysis"
+    elapsed = time.time() - manifest["created_at"]
+    manifest["fetch_time_sec"] = round(elapsed, 1)
+    manifest["note"] = (f"Fetched {len(manifest['tiles'])} composites in {elapsed:.0f}s "
+                        f"({area_sqmi:.1f} sq mi at zoom {effective_zoom})")
     save_manifest(manifest)
     return manifest
 
